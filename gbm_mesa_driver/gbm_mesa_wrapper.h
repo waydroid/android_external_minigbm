@@ -18,6 +18,8 @@
 
 #include <stdbool.h>
 
+#define MAX_PLANES 4
+
 struct gbm_device;
 struct gbm_bo;
 
@@ -29,10 +31,21 @@ struct alloc_args {
 	bool use_scanout;
 	bool force_linear;
 	bool needs_map_stride;
-	int out_fd;
-	uint32_t out_stride;
+	int out_fds[MAX_PLANES];
+	uint32_t out_strides[MAX_PLANES];
 	uint64_t out_modifier;
 	uint32_t out_map_stride;
+};
+
+struct import_args {
+	struct gbm_device *gbm;
+	uint32_t width;
+	uint32_t height;
+	uint32_t drm_format;
+	uint64_t modifier;
+	size_t num_planes;
+	const int *fds;
+	const uint32_t *strides;
 };
 
 struct gbm_ops {
@@ -46,9 +59,7 @@ struct gbm_ops {
 	int (*alloc)(struct alloc_args *args);
 
 	// MAPPER ONLY
-	struct gbm_bo *(*import)(struct gbm_device *gbm, int buf_fd, uint32_t width,
-				 uint32_t height, uint32_t stride, uint64_t modifier,
-				 uint32_t drm_format);
+	struct gbm_bo *(*import)(struct import_args *args);
 
 	void (*free)(struct gbm_bo *bo);
 

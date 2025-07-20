@@ -56,6 +56,7 @@ static const struct {
 	DRM_TO_GBM_FORMAT(FORMAT_ABGR2101010),
 	DRM_TO_GBM_FORMAT(FORMAT_XBGR16161616F),
 	DRM_TO_GBM_FORMAT(FORMAT_ABGR16161616F),
+	{926497081, GBM_FORMAT_YVU420}
 };
 
 static std::unordered_map<uint32_t, std::vector<uint64_t>> gbm_format_modifiers_map;
@@ -150,9 +151,11 @@ static int gbm_mesa_alloc(struct alloc_args *args)
 
 	/* gbm_mesa will create new fd, therefore it's our responsibility to close it once we don't
 	 * need the buffer */
-	args->out_fd = gbm_bo_get_fd(bo);
-
-	args->out_stride = gbm_bo_get_stride(bo);
+	size_t num_planes = gbm_bo_get_plane_count(bo);
+	for (size_t plane = 0; plane < num_planes; plane++) {
+		args->out_fds[plane] = gbm_bo_get_fd_for_plane(bo, plane);
+		args->out_strides[plane] = gbm_bo_get_stride_for_plane(bo, plane);
+	}
 	args->out_modifier = gbm_bo_get_modifier(bo);
 
 	/* Buffer is now handled through the system via out_fd, we can now destroy gbm_mesa bo */
@@ -165,11 +168,13 @@ static int gbm_mesa_alloc(struct alloc_args *args)
 			.width = args->width,
 			.height = args->height,
 			.format = gbm_format,
-			.num_fds = 1,
-			.fds[0] = args->out_fd,
-			.strides[0] = (int)args->out_stride,
+			.num_fds = (uint32_t)num_planes,
 			.modifier = args->out_modifier,
 		};
+		for (size_t plane = 0; plane < num_planes; plane++) {
+			data.fds[plane] = args->out_fds[plane];
+			data.strides[plane] = args->out_strides[plane];
+		}
 		void *addr = NULL;
 		void *map_data = NULL;
 
@@ -192,22 +197,22 @@ static int gbm_mesa_alloc(struct alloc_args *args)
 }
 
 // MAPPER ONLY!
-static struct gbm_bo *gbm_import(struct gbm_device *gbm, int buf_fd, uint32_t width,
-				 uint32_t height, uint32_t stride, uint64_t modifier,
-				 uint32_t drm_format)
+static struct gbm_bo *gbm_import(struct import_args *args)
 {
 	struct gbm_bo *bo = NULL;
 	struct gbm_import_fd_modifier_data data = {
-		.width = width,
-		.height = height,
-		.format = get_gbm_mesa_format(drm_format),
-		.num_fds = 1,
-		.fds[0] = buf_fd,
-		.strides[0] = (int)stride,
-		.modifier = modifier,
+		.width = args->width,
+		.height = args->height,
+		.format = get_gbm_mesa_format(args->drm_format),
+		.num_fds = (uint32_t)args->num_planes,
+		.modifier = args->modifier,
 	};
+	for (size_t plane = 0; plane < args->num_planes; plane++) {
+		data.fds[plane] = args->fds[plane];
+		data.strides[plane] = args->strides[plane];
+	}
 
-	bo = gbm_bo_import(gbm, GBM_BO_IMPORT_FD_MODIFIER, &data, 0);
+	bo = gbm_bo_import(args->gbm, GBM_BO_IMPORT_FD_MODIFIER, &data, 0);
 
 	return bo;
 }

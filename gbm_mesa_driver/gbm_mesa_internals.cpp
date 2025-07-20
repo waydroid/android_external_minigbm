@@ -307,8 +307,6 @@ int gbm_mesa_bo_create(struct bo *bo, uint32_t width, uint32_t height, uint32_t 
 	/* For some ARM SOCs, if no more free CMA available, buffer can be allocated in VRAM but HWC
 	 * won't be able to display it directly, using GPU for compositing */
 	bool scanout_strong = false;
-	bool bo_layout_ready = false;
-	uint32_t size_align = 1;
 	int err = 0;
 
 	auto drv = gbm_mesa_get_or_init_driver(bo->drv, false);
@@ -329,39 +327,6 @@ int gbm_mesa_bo_create(struct bo *bo, uint32_t width, uint32_t height, uint32_t 
 		.use_scanout = (use_flags & BO_USE_SCANOUT) != 0,
 	};
 
-	/* Alignment for RPI4 CSI camera. Since we do not care about other cameras, keep this
-	 * globally for now.
-	 * TODO: Create/use constraints table for camera/codecs */
-	if (use_flags & (BO_USE_CAMERA_READ | BO_USE_CAMERA_WRITE)) {
-		scanout_strong = true;
-		alloc_args.use_scanout = true;
-		alloc_args.width = ALIGN(alloc_args.width, 32);
-		size_align = 4096;
-	}
-
-	if (alloc_args.drm_format == 0) {
-		/* Always use linear for spoofed format allocations. */
-		drv_bo_from_format(bo, alloc_args.width, alloc_args.height, format);
-		bo_layout_ready = true;
-		bo->meta.total_size = ALIGN(bo->meta.total_size, size_align);
-		alloc_args.drm_format = DRM_FORMAT_R8;
-		alloc_args.width = bo->meta.total_size;
-		alloc_args.height = 1;
-		alloc_args.force_linear = true;
-
-		drv_logv("Unable to allocate 0x%08x format, allocate as 1D buffer", format);
-	}
-
-	if (alloc_args.drm_format == DRM_FORMAT_R8 && alloc_args.height == 1) {
-		/* Some mesa drivers may not support 1D allocations.
-		 * Use 2D texture with 4096 width instead.
-		 */
-		alloc_args.height = DIV_ROUND_UP(alloc_args.width, 4096);
-		alloc_args.width = 4096;
-		drv_logv("Allocate 1D buffer as %dx%d R8 2D texture", alloc_args.width,
-			 alloc_args.height);
-	}
-
 	err = wr->alloc(&alloc_args);
 
 	if (err && !scanout_strong) {
@@ -375,15 +340,16 @@ int gbm_mesa_bo_create(struct bo *bo, uint32_t width, uint32_t height, uint32_t 
 		return err;
 	}
 
-	if (!bo_layout_ready)
-		drv_bo_from_format(bo, alloc_args.out_stride, alloc_args.height, format);
+	drv_bo_from_format(bo, alloc_args.out_strides[0], alloc_args.height, format);
 
 	drv_logv("Allocated: %dx%d, stride: %d, map_stride: %d", width, height,
-		 alloc_args.out_stride, alloc_args.out_map_stride);
+		 alloc_args.out_strides[0], alloc_args.out_map_stride);
 
 	auto priv = new GbmMesaBoPriv();
 	for (size_t plane = 0; plane < bo->meta.num_planes; plane++) {
-		priv->fds[plane] = UniqueFd(alloc_args.out_fd);
+		priv->fds[plane] = UniqueFd(alloc_args.out_fds[plane]);
+		// bo->meta.strides[plane] = alloc_args.out_strides[plane];
+		// bo->meta.offsets[plane] = ...
 	}
 
 	priv->map_stride = alloc_args.out_map_stride;
@@ -412,19 +378,18 @@ int gbm_mesa_bo_import(struct bo *bo, struct drv_import_fd_data *data)
 		// Mapping require importing by gbm_mesa
 		auto drv = gbm_mesa_get_or_init_driver(bo->drv, true);
 		auto wr = drv->wrapper;
-
-		uint32_t s_format = data->format;
-		int s_height = data->height;
-		int s_width = data->width;
-		if (wr->get_gbm_format(s_format) == 0) {
-			s_width = bo->meta.total_size;
-			s_height = 1;
-			s_format = DRM_FORMAT_R8;
-		}
+		struct import_args import_args = {
+			.gbm = drv->gbm_dev,
+			.width = data->width,
+			.height = data->height,
+			.drm_format = data->format,
+			.num_planes = bo->meta.num_planes,
+			.fds = data->fds,
+			.strides = data->strides,
+		};
 
 		priv->drv = drv;
-		priv->gbm_bo = wr->import(drv->gbm_dev, data->fds[0], s_width, s_height,
-					  data->strides[0], data->format_modifier, s_format);
+		priv->gbm_bo = wr->import(&import_args);
 	}
 
 	bo->priv = priv;
@@ -459,16 +424,7 @@ void *gbm_mesa_bo_map(struct bo *bo, struct vma *vma, size_t plane, uint32_t map
 	assert(priv->gbm_bo != nullptr);
 
 	void *buf = MAP_FAILED;
-
-	uint32_t s_format = bo->meta.format;
-	int s_width = bo->meta.width;
-	int s_height = bo->meta.height;
-	if (wr->get_gbm_format(s_format) == 0) {
-		s_width = bo->meta.total_size;
-		s_height = 1;
-	}
-
-	wr->map(priv->gbm_bo, s_width, s_height, &buf, &vma->priv);
+	wr->map(priv->gbm_bo, bo->meta.width, bo->meta.height, &buf, &vma->priv);
 
 	return buf;
 }
