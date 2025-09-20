@@ -18,6 +18,7 @@
 
 #include <gbm.h>
 
+#include "../drv.h"
 #include "gbm_mesa_wrapper.h"
 
 #include <drm_fourcc.h>
@@ -56,6 +57,7 @@ static const struct {
 	DRM_TO_GBM_FORMAT(FORMAT_ABGR2101010),
 	DRM_TO_GBM_FORMAT(FORMAT_XBGR16161616F),
 	DRM_TO_GBM_FORMAT(FORMAT_ABGR16161616F),
+	{DRM_FORMAT_YVU420_ANDROID, GBM_FORMAT_GR88},
 };
 
 static std::unordered_map<uint32_t, std::vector<uint64_t>> gbm_format_modifiers_map;
